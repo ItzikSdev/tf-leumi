@@ -7,95 +7,138 @@ terraform {
   }
 }
 
-# Configure the AWS Provider
 provider "aws" {
   region  = var.region
   profile = var.profile_name
 }
 
-# Create a VPC
+# VPC
 resource "aws_vpc" "app_vpc" {
   cidr_block = var.vpc_cidr
-
   tags = {
     Name = "app-vpc"
   }
 }
 
-# Create an Internet Gateway
-resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.app_vpc.id
-
-  tags = {
-    Name = "vpc_igw"
-  }
-}
-
-# Create a public subnet
+# Subnet
 resource "aws_subnet" "public_subnet" {
   vpc_id                  = aws_vpc.app_vpc.id
-  cidr_block              = var.public_subnet_cidr
+  cidr_block              = var.vpc_cidr
   map_public_ip_on_launch = true
   availability_zone       = "eu-central-1a"
-
   tags = {
     Name = "public-subnet"
   }
 }
 
-# Create a route table
+# Internet Gateway
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.app_vpc.id
+  tags = {
+    Name = "vpc-igw"
+  }
+}
+
+# Route Table
 resource "aws_route_table" "public_rt" {
   vpc_id = aws_vpc.app_vpc.id
-
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
   }
-
-  tags = {
-    Name = "public_rt"
-  }
 }
 
-# Associate the route table with the public subnet
 resource "aws_route_table_association" "public_rt_asso" {
   subnet_id      = aws_subnet.public_subnet.id
   route_table_id = aws_route_table.public_rt.id
 }
 
-# Allocate an Elastic IP
-resource "aws_eip" "web_eip" {
-  instance = aws_instance.web.id
+# Security Group allowing HTTP traffic
+resource "aws_security_group" "allow_http_leumi" {
+  name        = "allow-http-leumi"
+  description = "Allow HTTP traffic"
+  vpc_id      = aws_vpc.app_vpc.id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["91.231.246.50/32"]
+  }
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "sg-http-leumi"
+  }
 }
 
-# Create an EC2 instance
-resource "aws_instance" "web" {
-  ami           = "ami-0d70546e43a941d70" 
-  instance_type = var.instance_type
-  key_name      = var.instance_key
+# EC2 Instance
+resource "aws_instance" "web_server" {
+  ami           = "ami-0d70546e43a941d70" # Ubuntu 22.04 AMI
+  instance_type = "t2.micro"
   subnet_id     = aws_subnet.public_subnet.id
-  security_groups = [aws_security_group.sg.id]
+  key_name      = var.instance_key
+  security_groups = [aws_security_group.allow_http_leumi.id]
 
   user_data = <<-EOF
-  #!/bin/bash
-  sudo apt update -y
-  sudo apt install apache2 -y
-  sudo systemctl start apache2
-  sudo systemctl enable apache2
+    #!/bin/bash
+    sudo apt update -y
+    sudo apt install apache2 -y
+    sudo systemctl start apache2
+    sudo systemctl enable apache2
   EOF
 
-  associate_public_ip_address = true
   tags = {
-    Name = "web_instance"
-  }
-  
-  volume_tags = {
-    Name = "web_instance"
+    Name = "test-web-server"
   }
 }
 
-# Associate the Elastic IP with the EC2 instance
-resource "aws_eip_association" "eip_assoc" {
-  instance_id   = aws_instance.web.id
-  allocation_id = aws_eip.web_eip.id
+# NLB
+resource "aws_lb" "nlb" {
+  name               = "app-nlb"
+  internal           = false
+  load_balancer_type = "network"
+  subnets            = [aws_subnet.public_subnet.id]
+}
+
+# Target Group
+resource "aws_lb_target_group" "app_tg" {
+  name     = "app-tg"
+  port     = 80
+  protocol = "TCP"
+  vpc_id   = aws_vpc.app_vpc.id
+}
+
+# NLB Listener
+resource "aws_lb_listener" "nlb_listener" {
+  load_balancer_arn = aws_lb.nlb.arn
+  port              = 80
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app_tg.arn
+  }
+}
+
+# Target Group Attachment
+resource "aws_lb_target_group_attachment" "tg_attachment" {
+  target_group_arn = aws_lb_target_group.app_tg.arn
+  target_id        = aws_instance.web_server.id
+  port             = 80
+}
+
+output "nlb_dns_name" {
+  value = aws_lb.nlb.dns_name
 }
