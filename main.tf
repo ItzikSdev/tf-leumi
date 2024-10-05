@@ -12,11 +12,10 @@ provider "aws" {
   profile = var.profile_name
 }
 
-# VPC
 resource "aws_vpc" "app_vpc" {
   cidr_block = var.vpc_cidr
   tags = {
-    Name = "app-vpc"
+    Name = "tf-app-vpc"
   }
 }
 
@@ -65,12 +64,7 @@ resource "aws_security_group" "allow_http_leumi" {
     protocol    = "tcp"
     cidr_blocks = ["91.231.246.50/32"]
   }
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -85,8 +79,8 @@ resource "aws_security_group" "allow_http_leumi" {
 
 # EC2 Instance
 resource "aws_instance" "web_server" {
-  ami           = "ami-0d70546e43a941d70" # Ubuntu 22.04 AMI
-  instance_type = "t2.micro"
+  ami           = "ami-099a546c02844706e" # Ubuntu 22.04 AMI
+  instance_type = "r6g.large"
   subnet_id     = aws_subnet.public_subnet.id
   key_name      = var.instance_key
   security_groups = [aws_security_group.allow_http_leumi.id]
